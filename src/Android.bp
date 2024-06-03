@@ -5,6 +5,7 @@ package {
 aconfig_declarations {
     name: "uprobestats_flags",
     package: "android.uprobestats.flags",
+    container: "system",
     srcs: ["flag.aconfig"],
 }
 
@@ -41,9 +42,11 @@ cc_binary {
     name: "uprobestats",
     srcs: [
         "UprobeStats.cpp",
+        "config.proto",
     ],
     static_libs: [
         "libc++fs",
+        "libjsoncpp",
         "libprotoutil",
         "libuprobestats",
         "uprobestats_flags_c_lib",
@@ -58,4 +61,22 @@ cc_binary {
     required: [
         "BitmapAllocation.o",
     ],
+    proto: {
+        type: "lite",
+        static: true,
+    },
+}
+
+python_binary_host {
+    name: "hello_uprobestats",
+    main: "test/hello_uprobestats.py",
+    srcs: [
+        "test/hello_uprobestats.py",
+        "config.proto",
+    ],
+    data: ["test/*.textproto"],
+    libs: ["libprotobuf-python"],
+    proto: {
+        canonical_path_from_root: false,
+    },
 }
