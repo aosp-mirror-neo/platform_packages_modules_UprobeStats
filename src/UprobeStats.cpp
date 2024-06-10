@@ -24,182 +24,107 @@
 #include <android_uprobestats_flags.h>
 #include <config.pb.h>
 #include <iostream>
-#include <json/json.h>
 #include <stdio.h>
-
 #include <string>
+#include <thread>
 
-#include "BpfUtilities.h"
-#include "ProcessInfoRetriever.h"
+#include "Bpf.h"
+#include "ConfigResolver.h"
 
-// Reads probing configuration from a file, which should be the serialized
-// bytes of a UprobestatsConfig proto.
-std::optional<uprobestats::protos::UprobestatsConfig>
-readConfig(std::string configFilePath) {
-  std::string config_str;
-  if (!android::base::ReadFileToString(configFilePath, &config_str)) {
-    LOG(ERROR) << "Failed to open config file " << configFilePath;
-    return {};
-  }
-
-  uprobestats::protos::UprobestatsConfig config;
-  bool success = config.ParseFromString(config_str);
-  if (!success) {
-    LOG(ERROR) << "Failed to parse file " << configFilePath
-               << " to UprobestatsConfig";
-    return {};
-  }
-
-  return config;
-}
-
-// Uses the oatdump binary to retrieve the offset for a given method
-int getMethodOffsetFromOatdump(std::string oat_file,
-                               std::string method_signature) {
-  // call oatdump and collect stdout
-  auto command = std::string("oatdump --oat-file=") + oat_file +
-                 std::string(" --dump-method-and-offset-as-json");
-  FILE *pipe = popen(command.c_str(), "r");
-  char buffer[256];
-  std::string result = "";
-  while (fgets(buffer, sizeof(buffer), pipe) != NULL) {
-    result += buffer;
-  }
-  pclose(pipe);
-
-  // find the first json blob with a method matching the provided signature
-  std::stringstream ss(result);
-  std::string line;
-  Json::Reader reader;
-  while (std::getline(ss, line)) {
-    Json::Value entry;
-    bool success = reader.parse(line, entry);
-    if (success) {
-      auto found_method_signature = entry["method"].asString();
-      if (found_method_signature == method_signature) {
-        auto hex_string = entry["offset"].asString();
-        int offset;
-        std::istringstream stream(hex_string);
-        stream >> std::hex >> offset;
-        return offset + 4096;
-      }
-    }
-  }
-
-  return 0;
-}
-
-struct BpfPerfEventConfig {
-  std::string filename;
-  int offset;
-  int pid;
-  std::string bpfProgramPath;
-  std::string bpfMapPath;
-};
-
-std::ostream &operator<<(std::ostream &os, const BpfPerfEventConfig &c) {
-  os << "filename: " << c.filename << " offset: " << c.offset
-     << " pid: " << c.pid << " bpfProgramPath: " << c.bpfProgramPath
-     << " bpfMapPath: " << c.bpfMapPath;
-  return os;
-}
-
-// Parses config and returns a list of arguments for
-// `android::uprobestats::bpfPerfEventOpen`
-std::optional<std::vector<BpfPerfEventConfig>>
-getBpfPerfEventConfigs(uprobestats::protos::UprobestatsConfig config) {
-  std::vector<BpfPerfEventConfig> result;
-  for (auto &task : config.tasks()) {
-    for (auto &probe_config : task.probe_configs()) {
-      int offset = 0;
-      std::string matched_file_path;
-      for (auto &file_path : probe_config.file_paths()) {
-        offset = getMethodOffsetFromOatdump(file_path,
-                                            probe_config.method_signature());
-        if (offset > 0) {
-          matched_file_path = file_path;
-          break;
-        }
-      }
-      if (offset == 0) {
-        LOG(ERROR) << "Unable to find method offset for "
-                   << probe_config.method_signature();
-        return {};
-      }
-      if (!task.has_target_process_name()) {
-        LOG(ERROR) << "task.target_process_name is required.";
-        return {};
-      }
-
-      auto process_name = task.target_process_name();
-      int pid = android::uprobestats::getPid(process_name);
-      if (pid < 0) {
-        LOG(ERROR) << "Unable to find pid of " << process_name;
-        return {};
-      }
-
-      auto prog_path = std::string("/sys/fs/bpf/uprobestats/") +
-                       probe_config.bpf_name().c_str();
-
-      auto map_path = std::string("/sys/fs/bpf/uprobestats/") +
-                      probe_config.bpf_map().c_str();
-
-      BpfPerfEventConfig eventConfig;
-      eventConfig.filename = matched_file_path;
-      eventConfig.offset = offset;
-      eventConfig.pid = pid;
-      eventConfig.bpfProgramPath = prog_path;
-      eventConfig.bpfMapPath = map_path;
-      result.push_back(eventConfig);
-    }
-  }
-  return result;
-}
+using namespace android::uprobestats;
 
 bool isUserBuild() {
-    return android::base::GetProperty("ro.build.type", "unknown") == "user";
+  return android::base::GetProperty("ro.build.type", "unknown") == "user";
+}
+
+bool isUprobestatsEnabled() {
+  return android::uprobestats::flags::enable_uprobestats();
+}
+
+const std::string bpf_path = std::string("/sys/fs/bpf/uprobestats/");
+std::string prefix_bpf(std::string value) { return bpf_path + value.c_str(); }
+
+struct PollArgs {
+  std::string map_path;
+  int duration_seconds;
+};
+
+void doPoll(PollArgs args) {
+  auto map_path = args.map_path;
+  auto duration_seconds = args.duration_seconds;
+  auto duration = std::chrono::seconds(duration_seconds);
+  auto start_time = std::chrono::steady_clock::now();
+  auto now = start_time;
+  while (now - start_time < duration) {
+    auto remaining = duration - (std::chrono::steady_clock::now() - start_time);
+    auto timeout_ms = static_cast<int>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(remaining)
+            .count());
+    auto result = bpf::pollRingBuf(map_path.c_str(), timeout_ms);
+    for (auto value : result) {
+      LOG(INFO) << "ringbuf result callback. value: " << value
+                << " map_path: " << map_path;
+    }
+    now = std::chrono::steady_clock::now();
+  }
+  LOG(INFO) << "finished polling for map_path: " << map_path;
 }
 
 int main(int argc, char **argv) {
-    if (isUserBuild()) {
-        // TODO(296108553): See if we could avoid shipping this binary on user
-        // builds.
-        LOG(ERROR) << "uprobestats disabled on user build. Exiting.";
-        return 1;
-    }
-    if (!android::uprobestats::flags::enable_uprobestats()) {
-        LOG(ERROR) << "uprobestats disabled by flag. Exiting.";
-        return 1;
-    }
-    if (argc < 2) {
-        LOG(ERROR) << "Not enough command line arguments. Exiting.";
-        return 1;
-    }
+  if (isUserBuild()) {
+    // TODO(296108553): See if we could avoid shipping this binary on user
+    // builds.
+    LOG(ERROR) << "uprobestats disabled on user build. Exiting.";
+    return 1;
+  }
+  if (!isUprobestatsEnabled()) {
+    LOG(ERROR) << "uprobestats disabled by flag. Exiting.";
+    return 1;
+  }
+  if (argc < 2) {
+    LOG(ERROR) << "Not enough command line arguments. Exiting.";
+    return 1;
+  }
 
-    std::optional<uprobestats::protos::UprobestatsConfig> config =
-        readConfig(std::string("/data/misc/uprobestats-configs/") + argv[1]);
-    if (!config.has_value()) {
-      LOG(ERROR) << "Failed to parse input file";
-      return 1;
-    }
-    auto eventConfigs = getBpfPerfEventConfigs(config.value());
-    if (!eventConfigs.has_value()) {
-      return 1;
-    }
+  auto config = config_resolver::readConfig(
+      std::string("/data/misc/uprobestats-configs/") + argv[1]);
+  if (!config.has_value()) {
+    return 1;
+  }
+  auto resolved_task = config_resolver::resolveSingleTask(config.value());
+  if (!resolved_task.has_value()) {
+    return 1;
+  }
 
-    std::set<std::string> map_paths;
-    for (auto &eventConfig : eventConfigs.value()) {
-      LOG(INFO) << "Opening bpf perf event from config: " << eventConfig;
-      map_paths.insert(eventConfig.bpfMapPath);
-      android::uprobestats::bpfPerfEventOpen(
-          eventConfig.filename.c_str(), eventConfig.offset, eventConfig.pid,
-          eventConfig.bpfProgramPath.c_str());
-    }
+  LOG(INFO) << "Found task config: " << resolved_task.value();
+  std::set<std::string> map_paths;
+  auto resolved_probe_configs =
+      config_resolver::resolveProbes(resolved_task.value().task_config);
+  if (!resolved_probe_configs.has_value()) {
+    return 1;
+  }
+  for (auto &resolved_probe : resolved_probe_configs.value()) {
+    LOG(INFO) << "Opening bpf perf event from probe: " << resolved_probe;
+    map_paths.insert(prefix_bpf(resolved_probe.probe_config.bpf_map()));
+    bpf::bpfPerfEventOpen(
+        resolved_probe.filename.c_str(), resolved_probe.offset,
+        resolved_task.value().pid,
+        prefix_bpf(resolved_probe.probe_config.bpf_name()).c_str());
+  }
 
-    sleep(60);
-    for (auto map_path : map_paths) {
-      android::uprobestats::printRingBuf(map_path.c_str());
-    }
+  std::vector<std::thread> threads;
+  for (auto map_path : map_paths) {
+    auto poll_args = PollArgs{
+        map_path, resolved_task.value().task_config.duration_seconds()};
+    LOG(INFO) << "Starting thread to collect results from map_path: "
+              << map_path;
+    threads.emplace_back(doPoll, poll_args);
+  }
+  for (auto &thread : threads) {
+    thread.join();
+  }
 
-    return 0;
+  LOG(INFO) << "done.";
+
+  return 0;
 }
