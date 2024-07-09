@@ -23,7 +23,10 @@
 
 #include <string>
 
+#include "bpf/BpfMap.h"
 #include "bpf/BpfRingbuf.h"
+
+#include "Bpf.h"
 
 namespace android {
 namespace uprobestats {
@@ -75,34 +78,38 @@ int bpfPerfEventOpen(const char *filename, int offset, int pid,
   return 0;
 }
 
-std::vector<int32_t> pollRingBuf(const char *map_path, int timeout_ms) {
-  auto result = android::bpf::BpfRingbuf<uint64_t>::Create(map_path);
-  std::vector<int32_t> vec;
-  if (!result.value()->wait(timeout_ms)) {
+template <typename T>
+std::vector<T> pollRingBuf(const char *mapPath, int timeoutMs) {
+  auto result = android::bpf::BpfRingbuf<T>::Create(mapPath);
+  std::vector<T> vec;
+  if (!result.value()->wait(timeoutMs)) {
     return vec;
   }
-  auto callback = [&](const uint64_t &value) { vec.push_back(value); };
+  auto callback = [&](const T &value) { vec.push_back(value); };
   result.value()->ConsumeAll(callback);
   return vec;
 }
 
-std::vector<int32_t> consumeRingBuf(const char *map_path) {
-  auto result = android::bpf::BpfRingbuf<uint64_t>::Create(map_path);
+template std::vector<uint32_t> pollRingBuf(const char *mapPath, int timeoutMs);
+template std::vector<CallResult> pollRingBuf(const char *mapPath,
+                                             int timeoutMs);
+
+std::vector<int32_t> consumeRingBuf(const char *mapPath) {
+  auto result = android::bpf::BpfRingbuf<uint64_t>::Create(mapPath);
   std::vector<int32_t> vec;
   auto callback = [&](const uint64_t &value) { vec.push_back(value); };
   result.value()->ConsumeAll(callback);
   return vec;
 }
 
-void printRingBuf(const char *map_path) {
-  auto result = android::bpf::BpfRingbuf<uint64_t>::Create(map_path);
+void printRingBuf(const char *mapPath) {
+  auto result = android::bpf::BpfRingbuf<uint64_t>::Create(mapPath);
   auto callback = [&](const uint64_t &value) {
     LOG(INFO) << "ringbuf result callback. value: " << value
-              << " map_path: " << map_path;
+              << " mapPath: " << mapPath;
   };
-  int num_consumed = result.value()->ConsumeAll(callback).value_or(-1);
-  LOG(INFO) << "ring buffer size: " << num_consumed
-            << " map_path: " << map_path;
+  int numConsumed = result.value()->ConsumeAll(callback).value_or(-1);
+  LOG(INFO) << "ring buffer size: " << numConsumed << " mapPath: " << mapPath;
 }
 
 } // namespace bpf
