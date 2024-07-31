@@ -23,11 +23,18 @@ namespace bpf {
 int bpfPerfEventOpen(const char *filename, int offset, int pid,
                      const char *bpfProgramPath);
 
-std::vector<int32_t> consumeRingBuf(const char *map_path);
+std::vector<int32_t> consumeRingBuf(const char *mapPath);
 
-std::vector<int32_t> pollRingBuf(const char *map_path, int timeout_ms);
+// TODO: share this struct with bpf
+struct CallResult {
+  unsigned long pc;
+  unsigned long regs[10];
+};
 
-void printRingBuf(const char *map_path);
+template <typename T>
+std::vector<T> pollRingBuf(const char *mapPath, int timeoutMs);
+
+void printRingBuf(const char *mapPath);
 
 } // namespace bpf
 } // namespace uprobestats
