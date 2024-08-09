@@ -3,15 +3,15 @@
 
 tasks {
     probe_configs {
-        bpf_name: "prog_GenericInstrumentation_uprobe_call"
-        bpf_map: "map_GenericInstrumentation_output_buf"
+        bpf_name: "prog_GenericInstrumentation_uprobe_call_detail"
+        bpf_map: "map_GenericInstrumentation_call_detail_buf""
         file_paths: "/system/framework/oat/arm64/services.odex"
         method_signature: "void com.android.server.am.BatteryStatsService.noteEvent(int, java.lang.String, int)"
     }
     target_process_name: "system_server"
     duration_seconds: 60
     statsd_logging_config {
-        atom_id: 71
+        atom_id: 915
         primitive_argument_positions: [0, 2]
     }
 }
