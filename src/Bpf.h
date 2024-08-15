@@ -18,10 +18,29 @@
 
 namespace android {
 namespace uprobestats {
+namespace bpf {
 
-int bpfPerfEventOpen(const char* filename, int offset, int pid, const char* bpfProgramPath);
+int bpfPerfEventOpen(const char *filename, int offset, int pid,
+                     const char *bpfProgramPath);
 
-void printRingBuf(const char* map_path);
+std::vector<int32_t> consumeRingBuf(const char *mapPath);
 
+// TODO: share this struct with bpf
+struct CallResult {
+  unsigned long pc;
+  unsigned long regs[10];
+};
+
+struct CallTimestamp {
+  unsigned int event;
+  unsigned long timestampNs;
+};
+
+template <typename T>
+std::vector<T> pollRingBuf(const char *mapPath, int timeoutMs);
+
+void printRingBuf(const char *mapPath);
+
+} // namespace bpf
 } // namespace uprobestats
 } // namespace android
