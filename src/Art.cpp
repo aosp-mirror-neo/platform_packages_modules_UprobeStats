@@ -21,11 +21,13 @@ namespace android {
 namespace uprobestats {
 namespace art {
 
+const int PAGE_OFFSET = 16384;
+
 // Uses the oatdump binary to retrieve the offset for a given method
-int getMethodOffsetFromOatdump(std::string oat_file,
-                               std::string method_signature) {
+int getMethodOffsetFromOatdump(std::string oatFile,
+                               std::string methodSignature) {
   // call oatdump and collect stdout
-  auto command = std::string("oatdump --oat-file=") + oat_file +
+  auto command = std::string("oatdump --oat-file=") + oatFile +
                  std::string(" --dump-method-and-offset-as-json");
   FILE *pipe = popen(command.c_str(), "r");
   char buffer[256];
@@ -43,13 +45,16 @@ int getMethodOffsetFromOatdump(std::string oat_file,
     Json::Value entry;
     bool success = reader.parse(line, entry);
     if (success) {
-      auto found_method_signature = entry["method"].asString();
-      if (found_method_signature == method_signature) {
-        auto hex_string = entry["offset"].asString();
+      auto foundMethodSignature = entry["method"].asString();
+      if (foundMethodSignature == methodSignature) {
+        auto hexString = entry["offset"].asString();
         int offset;
-        std::istringstream stream(hex_string);
+        std::istringstream stream(hexString);
         stream >> std::hex >> offset;
-        return offset + 4096;
+        if (offset == 0) {
+          return 0;
+        }
+        return offset + PAGE_OFFSET;
       }
     }
   }
