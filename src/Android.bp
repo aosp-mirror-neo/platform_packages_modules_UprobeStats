@@ -22,18 +22,17 @@ cc_library {
         "Bpf.cpp",
         "ConfigResolver.cpp",
         "Process.cpp",
+        "Guardrail.cpp",
         "config.proto",
     ],
     header_libs: [
         "bpf_headers",
-        "bpf_syscall_wrappers",
     ],
     shared_libs: [
         "libbase",
         "liblog",
     ],
     static_libs: [
-        "libc++fs",
         "libjsoncpp",
         "uprobestats_flags_c_lib",
     ],
@@ -50,7 +49,6 @@ cc_binary {
         "config.proto",
     ],
     static_libs: [
-        "libc++fs",
         "libjsoncpp",
         "libprotoutil",
         "libuprobestats",
@@ -67,6 +65,7 @@ cc_binary {
     required: [
         "BitmapAllocation.o",
         "GenericInstrumentation.o",
+        "ProcessManagement.o",
     ],
     proto: {
         type: "lite",
@@ -113,5 +112,27 @@ python_binary_host {
     libs: ["libprotobuf-python"],
     proto: {
         canonical_path_from_root: false,
+    },
+}
+
+cc_test {
+    name: "libuprobestats_test",
+    srcs: [
+        "config.proto",
+        "Guardrail-test.cpp",
+    ],
+    shared_libs: [
+        "libbase",
+    ],
+    static_libs: [
+        "libbase",
+        "libgtest",
+        "liblog",
+        "libprotoutil",
+        "libuprobestats",
+    ],
+    proto: {
+        type: "lite",
+        static: true,
     },
 }
