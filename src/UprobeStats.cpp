@@ -20,7 +20,9 @@
 #include <android-base/logging.h>
 #include <android-base/parseint.h>
 #include <android-base/properties.h>
+#include <android-base/scopeguard.h>
 #include <android-base/strings.h>
+#include <android/binder_process.h>
 #include <android_uprobestats_flags.h>
 #include <config.pb.h>
 #include <iostream>
@@ -30,6 +32,7 @@
 
 #include "Bpf.h"
 #include "ConfigResolver.h"
+#include "DebugLog.h"
 #include "Guardrail.h"
 #include <stats_event.h>
 
@@ -44,14 +47,6 @@ const std::string kUpdateDeviceIdleTempAllowlistMap =
 const std::string kProcessManagementMap =
     std::string("ProcessManagement_output_buf");
 const int kJavaArgumentRegisterOffset = 2;
-const bool kDebug = true;
-
-#define LOG_IF_DEBUG(msg)                                                      \
-  do {                                                                         \
-    if (kDebug) {                                                              \
-      LOG(INFO) << msg;                                                        \
-    }                                                                          \
-  } while (0)
 
 bool isUprobestatsEnabled() {
   return android::uprobestats::flags::enable_uprobestats();
@@ -200,6 +195,14 @@ void doPoll(PollArgs args) {
 }
 
 int main() {
+  if (android::uprobestats::flags::executable_method_file_offsets()) {
+    ABinderProcess_startThreadPool();
+  }
+  const auto guard = ::android::base::make_scope_guard([] {
+    if (android::uprobestats::flags::executable_method_file_offsets()) {
+      ABinderProcess_joinThreadPool();
+    }
+  });
   if (!isUprobestatsEnabled()) {
     LOG(ERROR) << "uprobestats disabled by flag. Exiting.";
     return 1;
@@ -210,8 +213,10 @@ int main() {
     LOG(ERROR) << "Failed to parse uprobestats config.";
     return 1;
   }
-  if (!guardrail::isAllowed(config.value(), android::base::GetProperty(
-                                                "ro.build.type", "unknown"))) {
+  if (!guardrail::isAllowed(
+          config.value(),
+          android::base::GetProperty("ro.build.type", "unknown"),
+          android::uprobestats::flags::executable_method_file_offsets())) {
     LOG(ERROR) << "uprobestats probing config disallowed on this device.";
     return 1;
   }
