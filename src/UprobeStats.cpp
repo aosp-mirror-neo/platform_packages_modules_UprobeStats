@@ -20,8 +20,9 @@
 #include <android-base/logging.h>
 #include <android-base/parseint.h>
 #include <android-base/properties.h>
+#include <android-base/scopeguard.h>
 #include <android-base/strings.h>
-#include <android_uprobestats_flags.h>
+#include <android/binder_process.h>
 #include <config.pb.h>
 #include <iostream>
 #include <stdio.h>
@@ -30,6 +31,8 @@
 
 #include "Bpf.h"
 #include "ConfigResolver.h"
+#include "DebugLog.h"
+#include "FlagSelector.h"
 #include "Guardrail.h"
 #include <stats_event.h>
 
@@ -44,17 +47,9 @@ const std::string kUpdateDeviceIdleTempAllowlistMap =
 const std::string kProcessManagementMap =
     std::string("ProcessManagement_output_buf");
 const int kJavaArgumentRegisterOffset = 2;
-const bool kDebug = true;
-
-#define LOG_IF_DEBUG(msg)                                                      \
-  do {                                                                         \
-    if (kDebug) {                                                              \
-      LOG(INFO) << msg;                                                        \
-    }                                                                          \
-  } while (0)
 
 bool isUprobestatsEnabled() {
-  return android::uprobestats::flags::enable_uprobestats();
+  return android::uprobestats::flag_selector::enable_uprobestats();
 }
 
 const std::string kBpfPath = std::string("/sys/fs/bpf/uprobestats/");
@@ -200,6 +195,9 @@ void doPoll(PollArgs args) {
 }
 
 int main() {
+  if (android::uprobestats::flag_selector::executable_method_file_offsets()) {
+    ABinderProcess_startThreadPool();
+  }
   if (!isUprobestatsEnabled()) {
     LOG(ERROR) << "uprobestats disabled by flag. Exiting.";
     return 1;
@@ -210,8 +208,11 @@ int main() {
     LOG(ERROR) << "Failed to parse uprobestats config.";
     return 1;
   }
-  if (!guardrail::isAllowed(config.value(), android::base::GetProperty(
-                                                "ro.build.type", "unknown"))) {
+  if (!guardrail::isAllowed(
+          config.value(),
+          android::base::GetProperty("ro.build.type", "unknown"),
+          android::uprobestats::flag_selector::
+              executable_method_file_offsets())) {
     LOG(ERROR) << "uprobestats probing config disallowed on this device.";
     return 1;
   }
@@ -232,7 +233,7 @@ int main() {
     LOG_IF_DEBUG("Opening bpf perf event from probe: " << resolvedProbe);
     if (resolvedProbe.filename ==
             "prog_ProcessManagement_uprobe_update_device_idle_temp_allowlist" &&
-        !android::uprobestats::flags::
+        !android::uprobestats::flag_selector::
             uprobestats_support_update_device_idle_temp_allowlist()) {
       LOG(ERROR) << "update_device_idle_temp_allowlist disabled by flag";
     }
@@ -251,7 +252,7 @@ int main() {
   for (auto mapPath : resolvedTask.value().taskConfig.bpf_maps()) {
     if (mapPath ==
             "map_ProcessManagement_update_device_idle_temp_allowlist_record" &&
-        !android::uprobestats::flags::
+        !android::uprobestats::flag_selector::
             uprobestats_support_update_device_idle_temp_allowlist()) {
       LOG(ERROR) << "update_device_idle_temp_allowlist disabled by flag";
     }
